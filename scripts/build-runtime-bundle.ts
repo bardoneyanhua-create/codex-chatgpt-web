@@ -47,11 +47,13 @@ const output = resolve(process.argv[2] ?? join(root, "dist", "runtime"));
 const appDir = join(output, "app");
 const runtimeDir = join(output, "runtime");
 const binDir = join(output, "bin");
+const chromeExtensionDir = join(output, "chrome-extension");
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(appDir, { recursive: true });
 mkdirSync(runtimeDir, { recursive: true });
 mkdirSync(binDir, { recursive: true });
+mkdirSync(chromeExtensionDir, { recursive: true });
 
 const build = await Bun.build({
   entrypoints: [join(root, "src", "cli.ts")],
@@ -78,6 +80,21 @@ const browserHelperBuild = await Bun.build({
 });
 if (!browserHelperBuild.success) {
   throw new Error(`Browser helper bundle failed: ${browserHelperBuild.logs.map(log => log.message).join("; ")}`);
+}
+
+cpSync(join(root, "chrome-extension"), chromeExtensionDir, { recursive: true });
+if (process.platform === "win32") {
+  const hostBuild = Bun.spawnSync([
+    process.execPath,
+    "build",
+    "--compile",
+    join(root, "src", "chrome-extension", "native-host-main.ts"),
+    "--outfile",
+    join(chromeExtensionDir, "codex-chatgpt-web-native-host.exe"),
+  ], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  if (hostBuild.exitCode !== 0) {
+    throw new Error(`Chrome Native Messaging host build failed: ${hostBuild.stderr.toString() || hostBuild.stdout.toString()}`);
+  }
 }
 
 copyFileSync(join(root, "package.json"), join(appDir, "package.json"));

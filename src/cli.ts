@@ -2,11 +2,12 @@
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { stdin, stdout } from "node:process";
 import { captureSystemBrowserLoginToFile, checkBrowserEngine, loginToChatGpt } from "./browser-login";
-import { defaultConfig, getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
+import { atomicWriteFile, defaultConfig, getConfigDir, getConfigPath, loadConfig, loadConfigForSetup, providerConfig, saveConfig } from "./config";
 import {
   inspectLauncherBrowserHost,
   inspectLauncherBrowserHostLiveness,
@@ -19,6 +20,8 @@ import {
   readCodexSubagentProtocol,
   setCodexSubagentProtocol,
   uninstallCodexIntegration,
+  installCodexIntegration,
+  preflightCodexIntegration,
 } from "./codex-integration";
 import { formatDoctorReport, runDoctor } from "./doctor";
 import { runChatGptMcpMain } from "./adapters/chatgpt-web/mcp-main";
@@ -30,6 +33,13 @@ import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
 import { runDevCommand } from "./dev-chat/cli";
+import {
+  CHROME_EXTENSION_ID,
+  inspectChromeNativeHost,
+  installChromeNativeHost,
+  uninstallChromeNativeHost,
+} from "./chrome-extension/install";
+import { createBrowserBackend } from "./browser-backends/index";
 
 const HELP = `codex-chatgpt-web ${VERSION}
 
@@ -43,6 +53,7 @@ Usage:
   codex-chatgpt-web route <status|connect|disconnect>
   codex-chatgpt-web subagents <status|compatibility-v1|native>
   codex-chatgpt-web browser check
+  codex-chatgpt-web chrome-extension <connect|status|check|disconnect> [options]
   codex-chatgpt-web dev launcher
   codex-chatgpt-web dev status [--json]
   codex-chatgpt-web dev setup <--browser-only|--full> [options]
@@ -86,6 +97,73 @@ Global:
   -h, --help
   -v, --version
 `;
+
+async function chromeExtensionCommand(args: string[]): Promise<void> {
+  const action = args.shift() ?? "status";
+  if (action === "status") {
+    assertNoArgs(args);
+    stdout.write(`${JSON.stringify(inspectChromeNativeHost(), null, 2)}\n`);
+    return;
+  }
+  if (action === "disconnect") {
+    assertNoArgs(args);
+    uninstallCodexIntegration();
+    uninstallChromeNativeHost();
+    stdout.write("Chrome Extension Backend disconnected; the previous Codex route was restored.\n");
+    return;
+  }
+  if (action === "check") {
+    assertNoArgs(args);
+    const config = loadConfig();
+    if (config.browserHost !== "chrome-extension") throw new Error("Chrome Extension Backend is not active");
+    const backend = createBrowserBackend(providerConfig(config));
+    try {
+      const session = await backend.inspectSession(false);
+      stdout.write(`Chrome extension is connected to an authenticated temporary ChatGPT surface: ${session.url}\n`);
+    } finally {
+      await backend.close();
+    }
+    return;
+  }
+  if (action !== "connect") throw new Error("Chrome extension command must be: connect, status, check, or disconnect");
+  const hostExecutable = takeOption(args, "--host-executable");
+  const extensionDirectory = takeOption(args, "--extension-dir");
+  const pipePath = takeOption(args, "--pipe");
+  const replaceCodexRoute = takeFlag(args, "--replace-codex-route");
+  assertNoArgs(args);
+  if (!hostExecutable || !extensionDirectory) {
+    throw new Error("chrome-extension connect requires --host-executable and --extension-dir");
+  }
+  const configPath = getConfigPath();
+  const previousConfig = existsSync(configPath) ? readFileSync(configPath) : undefined;
+  const existing = existsSync(getConfigPath()) ? loadConfigForSetup() : defaultConfig("browser-only");
+  const installed = installChromeNativeHost({ hostExecutable, extensionDirectory, ...(pipePath ? { pipePath } : {}) });
+  const next = {
+    ...existing,
+    mode: "browser-only" as const,
+    browserInteractionMode: "automatic" as const,
+    browserHost: "chrome-extension" as const,
+    chromeExtensionId: CHROME_EXTENSION_ID,
+    chromeExtensionPipePath: installed.pipePath,
+    chromeExtensionInstanceId: `codex-${randomUUID()}`,
+    solAvailable: false,
+    extraHighAvailable: false,
+    proAvailable: false,
+    autoApproveToolCalls: false,
+  };
+  try {
+    preflightCodexIntegration(next, { replaceExistingRoute: replaceCodexRoute });
+    saveConfig(next);
+    installCodexIntegration(next, { replaceExistingRoute: replaceCodexRoute });
+  } catch (error) {
+    if (previousConfig) atomicWriteFile(configPath, previousConfig);
+    else rmSync(configPath, { force: true });
+    uninstallChromeNativeHost();
+    throw error;
+  }
+  stdout.write(`Chrome Extension Backend connected. Load the unpacked extension from: ${installed.extensionDirectory}\n`);
+  stdout.write("Restart Codex after the local bridge is running so the model catalog refreshes.\n");
+}
 
 function takeOption(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -575,7 +653,8 @@ async function main(): Promise<void> {
       await checkBrowserEngine(config);
       stdout.write("Playwright can launch the configured Chrome executable.\n");
     }
-  } else if (command === "serve") {
+  } else if (command === "chrome-extension") await chromeExtensionCommand(args);
+  else if (command === "serve") {
     assertNoArgs(args);
     const config = loadConfig();
     const server = startServer(config);

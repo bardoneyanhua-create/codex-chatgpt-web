@@ -1,6 +1,8 @@
 export const CHATGPT_WEB_MODEL_PREFIX = "chatgpt-web/";
 export const CHATGPT_WEB_BACKEND_MODEL = "gpt-5.6-sol";
 export const CHATGPT_WEB_LUNA_BACKEND_MODEL = "gpt-5.6-luna";
+/** Internal identity for extension turns that keep the account's current/default webpage model. */
+export const CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL = "chatgpt-web-chrome-default";
 /** Internal adapter identity for a turn whose ChatGPT model is selected by the user in the launcher. */
 export const CHATGPT_WEB_ZERO_RISK_BACKEND_MODEL = "chatgpt-web-zero-risk";
 /** Internal adapter identity for the explicitly enabled, Pro-sized Zero Risk context profile. */
@@ -8,7 +10,8 @@ export const CHATGPT_WEB_ZERO_RISK_PRO_BACKEND_MODEL = "chatgpt-web-zero-risk-pr
 
 export type ChatGptWebAutomaticBackendModel =
   | typeof CHATGPT_WEB_BACKEND_MODEL
-  | typeof CHATGPT_WEB_LUNA_BACKEND_MODEL;
+  | typeof CHATGPT_WEB_LUNA_BACKEND_MODEL
+  | typeof CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL;
 export type ChatGptWebBackendModel =
   | ChatGptWebAutomaticBackendModel
   | ChatGptWebZeroRiskBackendModel;
@@ -125,6 +128,9 @@ export function resolveChatGptWebContextLimits(
       CHATGPT_WEB_ZERO_RISK_AUTO_COMPACT_TOKEN_LIMIT,
     );
   }
+  if (backendModel === CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL) {
+    return contextLimits(CHATGPT_WEB_INSTANT_CONTEXT_WINDOW, CHATGPT_WEB_INSTANT_AUTO_COMPACT_TOKEN_LIMIT);
+  }
   if (backendModel === CHATGPT_WEB_LUNA_BACKEND_MODEL) {
     // Luna carries continuity through a private checkpoint on every completed browser turn. Codex
     // internally clamps this field to 90% of the model window, but the reported active usage is the
@@ -167,6 +173,9 @@ export function resolveChatGptWebTransportLimits(
   capabilities: ChatGptWebAccountCapabilities,
 ): ChatGptWebTransportLimits {
   if (isChatGptWebZeroRiskBackendModel(backendModel)) return {};
+  if (backendModel === CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL) {
+    return { browserComposerCharLimit: CHATGPT_WEB_INSTANT_COMPOSER_CHAR_LIMIT };
+  }
   if (backendModel === CHATGPT_WEB_LUNA_BACKEND_MODEL) return {};
   if (!capabilities.proAvailable) {
     if (effort === "low") {
@@ -248,7 +257,19 @@ export interface ChatGptWebAccountCapabilities {
   experimentalBiggerContext?: boolean;
   browserInteractionMode?: "automatic" | "manual";
   zeroRiskProEnabled?: boolean;
+  browserHost?: "managed-chrome" | "launcher" | "chrome-extension";
 }
+
+export const CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE: ChatGptWebAutomaticModelRoute = {
+  slug: "chatgpt-web/chrome-default",
+  displayName: "ChatGPT Web — Chrome Default",
+  description: "Uses the current/default model in a dedicated temporary ChatGPT tab without claiming a specific webpage model.",
+  interactionMode: "automatic",
+  backendModel: CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL,
+  codexEffort: "low",
+  adapterEffort: "low",
+  requiresPro: false,
+};
 
 export const CHATGPT_WEB_ZERO_RISK_MODEL_ROUTE: ChatGptWebZeroRiskModelRoute = {
   slug: "chatgpt-web/zero-risk",
@@ -366,6 +387,7 @@ const routesBySlug = new Map(
     CHATGPT_WEB_ZERO_RISK_MODEL_ROUTE,
     CHATGPT_WEB_ZERO_RISK_PRO_MODEL_ROUTE,
     ...CHATGPT_WEB_LUNA_MODEL_ROUTES,
+    CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE,
     ...CHATGPT_WEB_MODEL_ROUTES,
   ]
     .map(route => [route.slug, route]),
@@ -386,6 +408,7 @@ export function availableChatGptWebModelRoutes(
       ? [CHATGPT_WEB_ZERO_RISK_MODEL_ROUTE, CHATGPT_WEB_ZERO_RISK_PRO_MODEL_ROUTE]
       : [CHATGPT_WEB_ZERO_RISK_MODEL_ROUTE];
   }
+  if (capabilities.browserHost === "chrome-extension") return [CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE];
   if (!capabilities.solAvailable) return CHATGPT_WEB_LUNA_MODEL_ROUTES;
   return CHATGPT_WEB_MODEL_ROUTES.filter(route =>
     (!route.requiresPro || capabilities.proAvailable)
@@ -412,6 +435,15 @@ export function requireChatGptWebModelRoute(
   }
   if (route.interactionMode === "manual") {
     throw new Error(`${route.displayName} is only available while Zero Risk is enabled`);
+  }
+  if (capabilities.browserHost === "chrome-extension") {
+    if (route !== CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE) {
+      throw new Error(`${route.displayName} is not available with the Chrome Extension Backend`);
+    }
+    return route;
+  }
+  if (route === CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE) {
+    throw new Error(`${route.displayName} is only available with the Chrome Extension Backend`);
   }
   if (route.backendModel === CHATGPT_WEB_LUNA_BACKEND_MODEL) {
     if (capabilities.solAvailable) {

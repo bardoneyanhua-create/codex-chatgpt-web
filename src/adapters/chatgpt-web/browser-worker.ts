@@ -1975,6 +1975,9 @@ export function resolveBrowserConfig(provider: CodexProviderConfig): ResolvedBro
   const configured = provider.chatgptWeb ?? {};
   const appName = configured.appName?.trim() || CHATGPT_CONNECTOR_NAME;
   const browserHost = configured.browserHost ?? "managed-chrome";
+  if (browserHost === "chrome-extension") {
+    throw new Error("Chrome Extension Backend must be created through the BrowserBackend factory");
+  }
   const browserHostDescriptorPath = configured.browserHostDescriptorPath?.trim();
   const browserHelperScriptPath = configured.browserHelperScriptPath?.trim();
   const browserDiagnosticsPath = resolve(expandUserPath(

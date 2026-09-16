@@ -3,6 +3,8 @@ import { chatGptConversationKey } from "../src/adapters/chatgpt-web/conversation
 import {
   availableChatGptWebModelRoutes,
   CHATGPT_WEB_BACKEND_MODEL,
+  CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL,
+  CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE,
   CHATGPT_WEB_LUNA_BACKEND_MODEL,
   CHATGPT_WEB_LUNA_MODEL_ROUTE,
   CHATGPT_WEB_LUNA_MODEL_ROUTES,
@@ -59,6 +61,22 @@ describe("fixed ChatGPT Web model routes", () => {
       .toThrow("Extra High is not available for this account");
     expect(() => requireChatGptWebModelRoute("chatgpt-web/pro", plus))
       .toThrow("Pro is not available for this account");
+  });
+
+  test("Chrome extension mode exposes one honest account-default route", () => {
+    const chrome = {
+      solAvailable: true,
+      extraHighAvailable: true,
+      proAvailable: true,
+      browserHost: "chrome-extension" as const,
+    };
+    expect(availableChatGptWebModelRoutes(chrome)).toEqual([CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE]);
+    expect(requireChatGptWebModelRoute("chatgpt-web/chrome-default", chrome))
+      .toBe(CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE);
+    expect(resolveChatGptWebContextLimits(CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL, "low", chrome))
+      .toEqual({ contextWindow: 41_000, effectiveContextWindowPercent: 78, autoCompactTokenLimit: 32_000 });
+    expect(() => requireChatGptWebModelRoute("chatgpt-web/high", chrome))
+      .toThrow("not available with the Chrome Extension Backend");
   });
 
   test("Extra High stays routable without granting Pro or Pro-sized context", () => {

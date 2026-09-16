@@ -6,12 +6,13 @@ import { tmpdir } from "node:os";
 import {
   CHATGPT_WEB_ZERO_RISK_BACKEND_MODEL,
   CHATGPT_WEB_ZERO_RISK_PRO_BACKEND_MODEL,
+  CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL,
 } from "./chatgpt-web-models";
 import type { CodexProviderConfig } from "./types";
 import { VERSION } from "./version";
 
 export type RuntimeMode = "browser-only" | "full";
-export type BrowserHostMode = "managed-chrome" | "launcher";
+export type BrowserHostMode = "managed-chrome" | "launcher" | "chrome-extension";
 export type BrowserInteractionMode = "automatic" | "manual";
 export type SubagentProtocol = "compatibility-v1" | "native";
 
@@ -77,6 +78,9 @@ export interface AppConfig {
   browserHost: BrowserHostMode;
   browserInteractionMode: BrowserInteractionMode;
   browserHostDescriptorPath?: string;
+  chromeExtensionId?: string;
+  chromeExtensionPipePath?: string;
+  chromeExtensionInstanceId?: string;
   chromeExecutablePath: string;
   storageStatePath: string;
   brokerSocketPath: string;
@@ -379,7 +383,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     throw new Error(`Invalid subagentProtocol in ${path}`);
   }
   if (parsed.host !== "127.0.0.1") throw new Error("The Responses proxy must bind to 127.0.0.1");
-  if (parsed.browserHost !== "managed-chrome" && parsed.browserHost !== "launcher") {
+  if (parsed.browserHost !== "managed-chrome" && parsed.browserHost !== "launcher" && parsed.browserHost !== "chrome-extension") {
     throw new Error(`Invalid browserHost in ${path}`);
   }
   const browserInteractionMode = parsed.browserInteractionMode ?? "automatic";
@@ -426,6 +430,21 @@ function parseConfig(value: unknown, path: string): AppConfig {
   if (parsed.browserHost === "launcher"
     && (typeof parsed.browserHostDescriptorPath !== "string" || !parsed.browserHostDescriptorPath.trim())) {
     throw new Error(`Launcher browser host requires browserHostDescriptorPath in ${path}`);
+  }
+  if (parsed.browserHost === "chrome-extension") {
+    if (typeof parsed.chromeExtensionId !== "string" || !/^[a-p]{32}$/.test(parsed.chromeExtensionId)) {
+      throw new Error(`Chrome extension browser host requires a valid chromeExtensionId in ${path}`);
+    }
+    if (typeof parsed.chromeExtensionPipePath !== "string" || !parsed.chromeExtensionPipePath.trim()) {
+      throw new Error(`Chrome extension browser host requires chromeExtensionPipePath in ${path}`);
+    }
+    if (process.platform === "win32" && !isWindowsPipeEndpoint(parsed.chromeExtensionPipePath)) {
+      throw new Error(`Chrome extension browser host requires a Windows named pipe in ${path}`);
+    }
+    if (parsed.chromeExtensionInstanceId !== undefined
+      && (typeof parsed.chromeExtensionInstanceId !== "string" || !/^[A-Za-z0-9._:-]{6,128}$/.test(parsed.chromeExtensionInstanceId))) {
+      throw new Error(`Invalid chromeExtensionInstanceId in ${path}`);
+    }
   }
   if (parsed.browserHost === "launcher"
     && !isAbsolute(expandUserPath(parsed.browserHostDescriptorPath!))) {
@@ -537,16 +556,21 @@ export function saveConfig(config: AppConfig): void {
 
 export function providerConfig(config: AppConfig): CodexProviderConfig {
   const manual = config.browserInteractionMode === "manual";
-  const model = manual
+  const extension = config.browserHost === "chrome-extension";
+  const model = extension
+    ? CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL
+    : manual
     ? CHATGPT_WEB_ZERO_RISK_BACKEND_MODEL
     : config.solAvailable ? "gpt-5.6-sol" : "gpt-5.6-luna";
-  const models = manual
+  const models = extension
+    ? [CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL]
+    : manual
     ? [
       CHATGPT_WEB_ZERO_RISK_BACKEND_MODEL,
       ...(config.zeroRiskProEnabled ? [CHATGPT_WEB_ZERO_RISK_PRO_BACKEND_MODEL] : []),
     ]
     : [model];
-  const efforts = manual
+  const efforts = extension || manual
     ? ["low"]
     : config.solAvailable
     ? ["low", "medium", "high", ...(config.extraHighAvailable === true ? ["xhigh"] : []), ...(config.proAvailable ? ["max"] : [])]
@@ -558,10 +582,10 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
     liveModels: false,
     defaultModel: model,
     contextWindow: config.contextWindow,
-    modelInputModalities: Object.fromEntries(models.map(model => [model, manual ? ["text"] : ["text", "image"]])),
+    modelInputModalities: Object.fromEntries(models.map(model => [model, extension || manual ? ["text"] : ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(models.map(modelId => [modelId, efforts])),
     modelDefaultReasoningEfforts: Object.fromEntries(
-      models.map(modelId => [modelId, manual ? "low" : config.solAvailable ? "high" : "low"]),
+      models.map(modelId => [modelId, extension || manual ? "low" : config.solAvailable ? "high" : "low"]),
     ),
     noReasoningModels: [],
     chatgptWeb: {
@@ -569,6 +593,9 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       browserInteractionMode: config.browserInteractionMode,
       browserHost: config.browserHost,
       browserHostDescriptorPath: config.browserHostDescriptorPath,
+      chromeExtensionId: config.chromeExtensionId,
+      chromeExtensionPipePath: config.chromeExtensionPipePath,
+      chromeExtensionInstanceId: config.chromeExtensionInstanceId,
       storageStatePath: config.storageStatePath,
       chromeExecutablePath: config.chromeExecutablePath,
       brokerSocketPath: config.brokerSocketPath,

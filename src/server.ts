@@ -1,5 +1,5 @@
 import { chatGptWebTraceId, createChatGptWebAdapter } from "./adapters/chatgpt-web";
-import { closeChatGptBrowserWorkers } from "./adapters/chatgpt-web/browser-worker";
+import { closeBrowserBackends } from "./browser-backends/index";
 import { closeTurnBrokers, TurnBroker } from "./adapters/chatgpt-web/turn-broker";
 import { timingSafeEqual } from "node:crypto";
 import { chatGptTurnSessions } from "./adapters/chatgpt-web/turn-execution";
@@ -1058,7 +1058,7 @@ export function startServer(
     flushResponseState();
     shutdownPromise = (async () => {
       const results = await Promise.allSettled([
-        closeChatGptBrowserWorkers(),
+        closeBrowserBackends(),
         closeTurnBrokers(),
       ]);
       const failures = results

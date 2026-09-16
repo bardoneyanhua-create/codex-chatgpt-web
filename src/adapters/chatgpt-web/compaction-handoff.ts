@@ -5,7 +5,7 @@ import type {
   CodexToolResultMessage,
 } from "../../types";
 import { extractChatGptCompactionSourceRevision } from "./environment";
-import type { ChatGptBrowserWorker } from "./browser-worker";
+import type { BrowserBackend } from "../../browser-backends/types";
 import { ChatGptCompactionHandoffAccepted } from "./adapter-error";
 import type { CompactionTransactionHandle } from "./compaction-transaction";
 import type { ChatGptWebCapabilities } from "./model";
@@ -275,7 +275,7 @@ export async function settleActiveZeroRiskCompactionSource(
 }
 
 export async function requestRetainedCompactionHandoff(
-  worker: ChatGptBrowserWorker,
+  worker: Pick<BrowserBackend, "run">,
   parsed: CodexParsedRequest,
   source: ChatGptTurnSession,
   broker: TurnBroker,

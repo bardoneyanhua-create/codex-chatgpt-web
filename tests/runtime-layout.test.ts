@@ -238,6 +238,25 @@ test("launcher browser ownership is explicit in provider configuration", () => {
   });
 });
 
+test("Chrome extension provider configuration exposes only the account-default text route", () => {
+  const config = defaultConfig("browser-only");
+  config.browserHost = "chrome-extension";
+  config.chromeExtensionId = "abcdefghijklmnopabcdefghijklmnop";
+  config.chromeExtensionPipePath = "\\\\.\\pipe\\codex-chatgpt-web-extension-test";
+  config.chromeExtensionInstanceId = "instance-test";
+  const provider = providerConfig(config);
+  expect(provider.models).toEqual(["chatgpt-web-chrome-default"]);
+  expect(provider.defaultModel).toBe("chatgpt-web-chrome-default");
+  expect(provider.modelInputModalities).toEqual({ "chatgpt-web-chrome-default": ["text"] });
+  expect(provider.modelReasoningEfforts).toEqual({ "chatgpt-web-chrome-default": ["low"] });
+  expect(provider.chatgptWeb).toMatchObject({
+    browserHost: "chrome-extension",
+    chromeExtensionId: config.chromeExtensionId,
+    chromeExtensionPipePath: config.chromeExtensionPipePath,
+    chromeExtensionInstanceId: config.chromeExtensionInstanceId,
+  });
+});
+
 test("Luna-only provider configuration exposes only the Luna backend", () => {
   const config = defaultConfig("browser-only");
   config.solAvailable = false;
