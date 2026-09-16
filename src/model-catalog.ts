@@ -2,6 +2,7 @@ import type { AppConfig } from "./config";
 import type { CodexModelContextOverride } from "./codex-integration";
 import {
   availableChatGptWebModelRoutes,
+  CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL,
   CHATGPT_WEB_MODEL_PREFIX,
   resolveChatGptWebContextLimits,
   type ChatGptWebModelRoute,
@@ -112,7 +113,10 @@ export function buildChatGptWebModel(
     slug: route.slug,
     display_name: route.displayName,
     description: route.description,
-    input_modalities: route.interactionMode === "manual" ? ["text"] : ["text", "image"],
+    input_modalities: route.interactionMode === "manual"
+      || route.backendModel === CHATGPT_WEB_CHROME_DEFAULT_BACKEND_MODEL
+      ? ["text"]
+      : ["text", "image"],
     visibility: "list",
     // These slugs are implemented by this local Responses-compatible bridge. Marking them false
     // makes Codex drop them from spawn_agent whenever openai_base_url points at the bridge.
