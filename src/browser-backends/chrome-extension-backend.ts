@@ -189,6 +189,10 @@ export class ChromeExtensionBackend implements BrowserBackend {
     if (event.type === "page_closed") this.taskTabs.delete(event.taskId);
     this.active.delete(event.requestId);
     const detail = event.error || event.type.replaceAll("_", " ");
+    console.warn(
+      `[chatgpt-web/chrome-extension] task=${event.taskId} tab=${event.tabId}`
+      + ` request=${event.requestId} terminal=${event.type} detail=${detail}`,
+    );
     active.reject(unavailable(`the dedicated ChatGPT tab ${detail}`));
   }
 }

@@ -1,8 +1,10 @@
 const HOST_NAME = "com.bardoneyanhua.codex_chatgpt_web";
 const TEMPORARY_CHAT_URL = "https://chatgpt.com/?temporary-chat=true";
+const BINDINGS_STORAGE_KEY = "taskBindings";
 const bindings = new Map();
 let nativePort;
 let reconnectTimer;
+let persistQueue = Promise.resolve();
 
 function keyOf(identity) {
   return `${identity.instanceId}:${identity.taskId}`;
@@ -54,11 +56,34 @@ function connectNative() {
 async function tabExists(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
-    return typeof tab.url === "string" && new URL(tab.url).hostname === "chatgpt.com";
+    return [tab.url, tab.pendingUrl].some(url => {
+      try { return typeof url === "string" && new URL(url).hostname === "chatgpt.com"; }
+      catch { return false; }
+    });
   } catch {
     return false;
   }
 }
+
+function persistBindings() {
+  const snapshot = [...bindings.values()].map(binding => ({ ...binding }));
+  persistQueue = persistQueue.then(() => chrome.storage.session.set({
+    [BINDINGS_STORAGE_KEY]: snapshot,
+  }));
+  return persistQueue;
+}
+
+async function restoreBindings() {
+  const stored = await chrome.storage.session.get(BINDINGS_STORAGE_KEY);
+  const candidates = stored?.[BINDINGS_STORAGE_KEY];
+  if (!Array.isArray(candidates)) return;
+  for (const binding of candidates) {
+    if (!validIdentity(binding, true) || !await tabExists(binding.tabId)) continue;
+    bindings.set(keyOf(binding), { ...binding });
+  }
+}
+
+const bindingsReady = restoreBindings();
 
 async function sendToContent(tabId, message, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -78,23 +103,28 @@ async function createDedicatedTab(request) {
   const existing = bindings.get(bindingKey);
   if (existing && await tabExists(existing.tabId)) {
     existing.requestId = request.requestId;
+    await persistBindings();
     return existing.tabId;
   }
   if (existing) bindings.delete(bindingKey);
   const tab = await chrome.tabs.create({ url: TEMPORARY_CHAT_URL, active: false });
   if (!Number.isSafeInteger(tab.id)) throw new Error("Chrome did not assign a tab id");
   bindings.set(bindingKey, {
+    version: request.version,
     instanceId: request.instanceId,
     taskId: request.taskId,
     requestId: request.requestId,
     tabId: tab.id,
+    watchReload: false,
   });
+  await persistBindings();
   return tab.id;
 }
 
 async function handleNativeRequest(request) {
   if (!validIdentity(request)) return;
   try {
+    await bindingsReady;
     if (request.type === "create_task") {
       const tabId = await createDedicatedTab(request);
       response({ ...request, tabId }, "task_created", { ok: true });
@@ -118,10 +148,12 @@ async function handleNativeRequest(request) {
       return;
     }
     const binding = bindings.get(keyOf(request));
-    if (!binding || request.tabId !== binding.tabId || !await tabExists(binding.tabId)) {
-      throw new Error("No dedicated ChatGPT tab owns this exact task identity");
-    }
+    if (!binding) throw new Error(`No dedicated ChatGPT tab owns this exact task identity (known bindings: ${bindings.size})`);
+    if (request.tabId !== binding.tabId) throw new Error("The dedicated ChatGPT tab id does not match this exact task identity");
+    if (!await tabExists(binding.tabId)) throw new Error("The dedicated ChatGPT tab no longer exists for this exact task identity");
     binding.requestId = request.requestId;
+    binding.watchReload = false;
+    await persistBindings();
     if (request.type === "send_text") {
       const result = await sendToContent(binding.tabId, {
         type: "send_text",
@@ -129,6 +161,8 @@ async function handleNativeRequest(request) {
         text: request.text,
       });
       if (result?.ok !== true) throw new Error(result?.error || "ChatGPT page rejected the prompt");
+      binding.watchReload = true;
+      await persistBindings();
       response(request, "ack", { ok: true });
       return;
     }
@@ -144,6 +178,7 @@ async function handleNativeRequest(request) {
     }
     if (request.type === "close_task") {
       bindings.delete(keyOf(request));
+      await persistBindings();
       await chrome.tabs.remove(binding.tabId);
       response(request, "ack", { ok: true });
       return;
@@ -159,23 +194,31 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   const binding = bindings.get(keyOf(message.event));
   if (!binding || sender.tab?.id !== binding.tabId || message.event.tabId !== binding.tabId
     || message.event.requestId !== binding.requestId) return;
+  if (message.event.type === "answer_complete") {
+    binding.watchReload = false;
+    void persistBindings();
+  }
   post(message.event);
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
+  let changed = false;
   for (const [bindingKey, binding] of bindings) {
     if (binding.tabId !== tabId) continue;
     bindings.delete(bindingKey);
+    changed = true;
     post({ version: 1, type: "page_closed", ...binding });
   }
+  if (changed) void persistBindings();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== "loading") return;
   for (const binding of bindings.values()) {
-    if (binding.tabId === tabId) post({ version: 1, type: "page_reloaded", ...binding });
+    if (binding.tabId === tabId && binding.watchReload) {
+      post({ version: 1, type: "page_reloaded", ...binding });
+    }
   }
 });
 
 connectNative();
-

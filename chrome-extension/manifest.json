@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Routes explicitly bound Codex tasks through dedicated ChatGPT tabs in this Chrome profile.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuJo35YyaXA0YcVrQIBcW6CpNwRutzbcGwE7OoShf9toYeR3vP2+tqeyVfp3VmlXd1yyaenEmqj9cIo9u9n5zs4ry1VbAdHXg6uWo0PM6nQAf2zkCGHlK52bS8I2mtlzNHmJcrGswkY7RZDdh1L1HNFPTVCK2Q8xTkLgVkFaWlvQ0+KhvaHrEikzi7ejAyEH/9/fYj4ecki/OptvcPHcLZj9VS9LWhorFpOQhMlW7XI/o3N4bjL2xHubTw0bj5JPZ+ag2PxqLfkOhNxW3yC18ZdeLhcix7ooJls6Zt5JaV14WMb2bC17ekyU/E2CyTQqToLNwVkDO/2S6Ui3OI0o92QIDAQAB",
-  "permissions": ["nativeMessaging"],
+  "permissions": ["nativeMessaging", "storage"],
   "host_permissions": ["https://chatgpt.com/*"],
   "background": {
     "service_worker": "service-worker.js"
@@ -17,4 +17,3 @@
     }
   ]
 }
-

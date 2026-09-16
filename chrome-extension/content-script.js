@@ -103,7 +103,7 @@ function currentAssistant(baseline) {
 }
 
 function answerText(element) {
-  const markdown = [...element.querySelectorAll(".markdown")].filter(visible);
+  const markdown = Array.from(element.querySelectorAll(".markdown")).filter(visible);
   const source = markdown.length === 1 ? markdown[0] : markdown.length === 0 ? element : undefined;
   if (!source) throw new Error("ChatGPT answer structure is ambiguous");
   return source.innerText.trim();
@@ -117,7 +117,6 @@ function stopObservation() {
 
 function observeAnswer(identity, baseline) {
   let started = false;
-  let emitted = "";
   const timer = setInterval(() => {
     try {
       const session = inspectSession();
@@ -135,12 +134,7 @@ function observeAnswer(identity, baseline) {
       }
       if (!assistant) return;
       const text = answerText(assistant);
-      if (!text.startsWith(emitted)) throw new Error("ChatGPT rewrote already emitted answer text");
-      if (text !== emitted) {
-        emitted = text;
-        emit(identity, "answer_delta", { text });
-      }
-      const completeActions = [...assistant.querySelectorAll(COMPLETE_SELECTOR)].filter(visible);
+      const completeActions = Array.from(assistant.querySelectorAll(COMPLETE_SELECTOR)).filter(visible);
       if (completeActions.length > 1) throw new Error("ChatGPT completion structure is ambiguous");
       if (running === 0 && completeActions.length === 1 && text) {
         emit(identity, "answer_complete", { text });
@@ -154,6 +148,14 @@ function observeAnswer(identity, baseline) {
   active = { identity, timer };
 }
 
+function normalizeLines(value) {
+  return value.replace(/\r\n?/g, "\n");
+}
+
+function composerPlainText(composer) {
+  return typeof composer.innerText === "string" ? composer.innerText : composer.textContent;
+}
+
 function insertExactPrompt(composer, text) {
   composer.focus();
   const selection = getSelection();
@@ -163,8 +165,72 @@ function insertExactPrompt(composer, text) {
   selection.addRange(range);
   document.execCommand("delete", false);
   document.execCommand("insertText", false, text);
-  composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
-  if (composer.textContent !== text) throw new Error("ChatGPT composer did not preserve the exact prompt");
+  if (normalizeLines(composerPlainText(composer)) !== normalizeLines(text)) {
+    throw new Error("ChatGPT composer did not preserve the exact prompt");
+  }
+}
+
+function submissionStarted(composer, baseline) {
+  if (!composer.isConnected) return true;
+  if (normalizeLines(composerPlainText(composer)).trim() === "") return true;
+  const running = [...document.querySelectorAll(STOP_SELECTOR)].filter(visible).length;
+  if (running > 1) throw new Error("ChatGPT exposed multiple stop controls");
+  return running === 1 || Boolean(currentAssistant(baseline));
+}
+
+function requireExactDraft(composer, text) {
+  if (normalizeLines(composerPlainText(composer)) !== normalizeLines(text)) {
+    throw new Error("ChatGPT changed the prompt before accepting it");
+  }
+}
+
+async function activateExactSend(composer, send, text, baseline) {
+  send.click();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  if (submissionStarted(composer, baseline)) return;
+  requireExactDraft(composer, text);
+
+  composer.focus();
+  composer.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Enter",
+    code: "Enter",
+    bubbles: true,
+    cancelable: true,
+  }));
+  composer.dispatchEvent(new KeyboardEvent("keyup", {
+    key: "Enter",
+    code: "Enter",
+    bubbles: true,
+    cancelable: true,
+  }));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  if (submissionStarted(composer, baseline)) return;
+  requireExactDraft(composer, text);
+
+  const form = send.closest("form");
+  if (form && form.contains(composer) && typeof form.requestSubmit === "function") {
+    form.requestSubmit(send);
+  }
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    if (submissionStarted(composer, baseline)) return;
+  }
+  throw new Error("ChatGPT did not accept the exact prompt");
+}
+
+async function sendControlWhenReady(timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      const send = exactVisible('button[data-testid="send-button"]');
+      if (!send.disabled && send.getAttribute("aria-disabled") !== "true") return send;
+    } catch (error) {
+      if (error?.retryable !== true) throw error;
+    }
+    if (Date.now() >= deadline) throw new Error("ChatGPT send control is disabled");
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 }
 
 async function sendText(message) {
@@ -174,11 +240,8 @@ async function sendText(message) {
   const baseline = new Set([...document.querySelectorAll(ASSISTANT_SELECTOR)].map(assistantIdentity).filter(Boolean));
   const composer = exactVisible(COMPOSER_SELECTOR);
   insertExactPrompt(composer, message.text);
-  const send = exactVisible('button[data-testid="send-button"]');
-  if (send.disabled || send.getAttribute("aria-disabled") === "true") {
-    throw new Error("ChatGPT send control is disabled");
-  }
-  send.click();
+  const send = await sendControlWhenReady();
+  await activateExactSend(composer, send, message.text, baseline);
   observeAnswer(message.identity, baseline);
   return { ok: true };
 }
