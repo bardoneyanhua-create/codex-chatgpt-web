@@ -18,10 +18,28 @@ function visible(element) {
     && getComputedStyle(element).visibility !== "hidden";
 }
 
+function describeElement(element) {
+  const attribute = name => {
+    const value = element.getAttribute(name);
+    return value === null ? "" : `[${name}=${JSON.stringify(value.slice(0, 80))}]`;
+  };
+  return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`
+    + attribute("data-testid")
+    + attribute("contenteditable")
+    + attribute("data-lexical-editor")
+    + attribute("aria-hidden")
+    + attribute("role");
+}
+
 function exactVisible(selector) {
   const matches = [...document.querySelectorAll(selector)].filter(visible);
-  if (matches.length !== 1) throw new Error(`ChatGPT structure is ambiguous for ${selector}`);
-  return matches[0];
+  const leaves = matches.filter(candidate => !matches.some(other => other !== candidate && candidate.contains(other)));
+  if (leaves.length !== 1) {
+    const error = new Error(`ChatGPT structure is ambiguous for ${selector}: ${leaves.map(describeElement).join(", ")}`);
+    error.retryable = leaves.length === 0;
+    throw error;
+  }
+  return leaves[0];
 }
 
 function emit(identity, type, fields = {}) {
@@ -45,7 +63,25 @@ function inspectSession() {
       ...(temporary ? {} : { error: "The dedicated tab is not a Temporary Chat" }),
     };
   } catch (error) {
-    return { authenticated: false, temporary: false, url: location.href, error: error.message };
+    return {
+      authenticated: false,
+      temporary: false,
+      url: location.href,
+      error: error.message,
+      retryable: error?.retryable === true,
+    };
+  }
+}
+
+async function inspectSessionWhenReady(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const session = inspectSession();
+    if (!session.retryable || Date.now() >= deadline) {
+      const { retryable: _retryable, ...result } = session;
+      return result;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
 }
 
@@ -133,7 +169,7 @@ function insertExactPrompt(composer, text) {
 
 async function sendText(message) {
   if (active) throw new Error("This dedicated ChatGPT tab already has a running Codex request");
-  const session = inspectSession();
+  const session = await inspectSessionWhenReady();
   if (!session.authenticated || !session.temporary) throw new Error(session.error || "ChatGPT login is required");
   const baseline = new Set([...document.querySelectorAll(ASSISTANT_SELECTOR)].map(assistantIdentity).filter(Boolean));
   const composer = exactVisible(COMPOSER_SELECTOR);
@@ -150,7 +186,7 @@ async function sendText(message) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
     try {
-      if (message?.type === "inspect_session") return inspectSession();
+      if (message?.type === "inspect_session") return await inspectSessionWhenReady();
       if (message?.type === "task_health") {
         const session = inspectSession();
         return { healthy: session.authenticated && session.temporary };
@@ -171,4 +207,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })().then(sendResponse);
   return true;
 });
-
