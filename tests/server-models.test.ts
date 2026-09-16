@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { defaultConfig } from "../src/config";
 import {
+  CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE,
   CHATGPT_WEB_ZERO_RISK_MODEL_ROUTE,
   CHATGPT_WEB_MODEL_ROUTES,
   resolveChatGptWebContextLimits,
@@ -99,6 +100,36 @@ test("Luna-only account exposes no paid ChatGPT Web routes", async () => {
   const body = await response.json() as { models: Array<{ slug: string }> };
   expect(body.models.filter(model => model.slug.startsWith("chatgpt-web/")).map(model => model.slug))
     .toEqual(["chatgpt-web/luna", "chatgpt-web/think"]);
+});
+
+test("Chrome Extension Backend publishes only its honest account-default route", async () => {
+  const config = defaultConfig("browser-only");
+  config.browserHost = "chrome-extension";
+  config.chromeExtensionId = "abcdefghijklmnopabcdefghijklmnop";
+  config.chromeExtensionPipePath = "\\\\.\\pipe\\codex-chatgpt-web-extension-test";
+  const response = await modelsRequest(
+    new Request("http://127.0.0.1:17841/v1/models", {
+      headers: { authorization: "Bearer codex-oauth-token" },
+    }),
+    config,
+    async () => Response.json({
+      models: [{
+        slug: "gpt-5.6-sol",
+        display_name: "5.6 Sol",
+        visibility: "list",
+        supported_in_api: true,
+        supported_reasoning_levels: [{ effort: "low", description: "Low" }],
+        tool_mode: "code_mode_only",
+      }],
+    }),
+  );
+  const body = await response.json() as { models: Array<{ slug: string; input_modalities?: string[] }> };
+  expect(body.models.filter(model => model.slug.startsWith("chatgpt-web/"))).toEqual([
+    expect.objectContaining({
+      slug: CHATGPT_WEB_CHROME_DEFAULT_MODEL_ROUTE.slug,
+      input_modalities: ["text"],
+    }),
+  ]);
 });
 
 test("Zero Risk returns one generic Web row without using scanned capabilities", async () => {
